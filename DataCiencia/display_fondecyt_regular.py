@@ -11,11 +11,11 @@ as well. I'd especially love to see what other kinds of visualizations you guys 
 import numpy as np
 import pandas as pd
 from fuzzywuzzy import fuzz
-import re, unicodedata
+import re, unicodedata, datetime
 
-from bokeh.models import CustomJS, ColumnDataSource, Paragraph, Select, HoverTool, BoxZoomTool, ResetTool,\
+from bokeh.models import CustomJS, ColumnDataSource, Div, Paragraph, Select, HoverTool, BoxZoomTool, ResetTool,\
     DatetimeTickFormatter, HBox, VBox
-from bokeh.plotting import Figure, output_file, save
+from bokeh.plotting import Figure, output_file, save, show
 
 
 def create_cds_key(s):
@@ -32,7 +32,7 @@ def create_cds_key(s):
 
 # mode=inline bundles the bokeh js and css in the html rather than accessing the cdn
 # this is handy since kaggle scripts can't access internet resources
-output_file('display_fondecyt_regular.html')
+output_file('display_fondecyt_regular.html', title='Centro de Estudios ANIP')
 
 # Read Mineduc data
 mineduc_file='data/Mineduc Listado IES Vigentes 05-2016.csv'
@@ -72,13 +72,16 @@ for i in range(len(fondecyt.index)):
             print('Mineduc name: ', mineduc.ix[d.idxmax(), 'nombre'])
         fondecyt.ix[i,'nombre']=mineduc.ix[d.idxmax(), 'nombre']
 
-fondecyt['tasa_aprobacion']=np.round(fondecyt['n_aprobados']/fondecyt['n_concursados']*100,decimals=1)
+fondecyt=fondecyt.rename(columns = {'n_concursados':'Concursados', 'n_aprobados':'Adjudicados'})
+fondecyt['Tasa de adjudicacion']=np.round(fondecyt['Adjudicados']/fondecyt['Concursados']*100,decimals=1)
+
 data=fondecyt.copy()
 data=pd.melt(fondecyt, id_vars=['nombre','año'], var_name='categoria', value_name='valor').fillna(0)
 data['nombre']=data.apply(lambda x: unicodedata.normalize('NFD', x['nombre']).encode('ascii', 'ignore').decode("utf-8").replace('-', '_').replace("'", '').replace(',', ''), axis=1)
-data_nombre_unique=data.query("categoria == 'n_aprobados'").groupby('nombre').sum().sort_values('valor', ascending=False).index.values
+data_nombre_unique=data.query("categoria == 'Adjudicados'").groupby('nombre').sum().sort_values('valor', ascending=False).index.values
 #data['categoria']=data.apply(lambda x: x['nombre']+'_'+x['categoria'], axis=1)
 data['dt']=pd.to_datetime(data['año'], format='%Y')
+
 
 # read the data
 #data = pd.read_csv('data/GlobalLandTemperaturesByState.csv', parse_dates=['dt'])
@@ -91,14 +94,12 @@ plot_sources = dict()
 
 #
 countries = list(data_nombre_unique)
-print(countries)
 for country in countries:
     country_data = data.loc[data['nombre'] == country]
     country_states = list(country_data['categoria'].unique())
-    state_select = Select(value=country_states[0], title='Categoria', options=country_states)
+    state_select = Select(value=country_states[0], title='Categoria de proyecto', options=country_states)
 
     country_key = create_cds_key(country)
-    print(country_key)
     plot_sources[country_key] = state_select
 
     # create a ColumnDataSource for each state in country
@@ -108,42 +109,51 @@ for country in countries:
         state_data = state_data.set_index('dt')
         state_data = state_data.reindex(dr).fillna(0.)
         state_data.index.name = 'dt'
-        #print(state_data)
 
         state_key = create_cds_key(country)+'_'+create_cds_key(state)
-        print(state_key)
         plot_sources[state_key] = ColumnDataSource(state_data)
 
-print(plot_sources)
 
 # create a ColumnDataSource to use for the actual plot, default on Oregon, United States
-plot_data = data.loc[(data['nombre'] == 'Universidad de Chile') & (data['categoria'] == 'n_concursados')]
+plot_data = data.loc[(data['nombre'] == 'Universidad de Chile') & (data['categoria'] == 'Concursados')]
 plot_data = plot_data.drop(['nombre', 'categoria', 'año'], axis=1)
-plot_data['dt_formatted'] = plot_data['dt'].apply(lambda x: x.strftime('%b %Y'))
+plot_data['dt_formatted'] = plot_data['dt'].apply(lambda x: x.strftime('%Y'))
 plot_data = plot_data.set_index('dt')
 plot_data = plot_data.reindex(dr).fillna(0.)
 plot_data.index.name = 'dt'
 plot_sources['plot_source'] = ColumnDataSource(plot_data)
-print(plot_data)
 
 # configure HoverTool
 hover = HoverTool(
-        tooltips=[
-            ("Fecha", "@dt_formatted"),
-            ("Valor", "@valor"),
-        ]
+#        tooltips=[
+#            ("Año", "@dt_formatted"),
+#            ("Valor", "@valor"),
+#        ],
+        tooltips="""
+            <div style="background: #FFFFFF;">
+                <span style="font-size: 20px;">Año: @dt_formatted</span><br />
+                <span style="font-size: 18px; color: black;">Valor: @valor{1.1}</span>
+            </div>
+        """,
+        names=["circle"]
     )
 
 # setup some basic tools for the plot interactions
 TOOLS = [BoxZoomTool(), hover, ResetTool()]
 
 # define our plot and set various plot components
-plot = Figure(plot_width=1000, x_axis_type='datetime', title='Proyectos Fondecyt regular', tools=TOOLS)
-plot.line('dt', 'valor', source=plot_sources['plot_source'], line_width=3, line_alpha=0.6)
+plot = Figure(plot_width=700, x_axis_type='datetime', title='Proyectos Fondecyt regular', x_range=(datetime.date(2009,9,1),datetime.date(2016,6,1)), tools=TOOLS)
+plot.circle('dt', 'valor', source=plot_sources['plot_source'], size=10, name="circle")
+plot.line('dt', 'valor', source=plot_sources['plot_source'], line_width=3, line_alpha=0.6, name="line")
+plot.xaxis.axis_label = "Año"
 plot.yaxis.axis_label = "Número de proyectos"
 plot.axis.axis_label_text_font_size = "12pt"
 plot.axis.axis_label_text_font_style = "bold"
 plot.xaxis[0].formatter = DatetimeTickFormatter(formats=dict(months=["%b %Y"], years=["%Y"]))
+plot.title.align='center'
+plot.title.text_font='Roboto'
+plot.title.text_font_size='16pt'
+plot.title.text_alpha=0.7
 
 # add the plot and yaxis to our sources dict so we can manipulate various properties via javascript
 plot_sources['plot'] = plot
@@ -217,10 +227,10 @@ states_callback = CustomJS(args=plot_sources, code="""
         plot.set('title', state + ', ' + country_title);
 
         var plot_data = plot_source.get('data');
+        var country = country_select.get('value');
 
-        state = country.replace(/\s+/g, '_').toLowerCase()+'_'+state.replace(/\s+/g, '_').toLowerCase();
-        console.log(state)
-        var eval_str = state + ".get('data')"
+        var name_category = country.replace(/\s+/g, '_').toLowerCase()+'_'+state.replace(/\s+/g, '_').toLowerCase();
+        var eval_str = name_category + ".get('data')"
         var new_data = eval(eval_str);
 
         plot_data['dt'] = []
@@ -229,6 +239,14 @@ states_callback = CustomJS(args=plot_sources, code="""
         for (i = 0; i < new_data['dt'].length; i++) {
             plot_data['dt'].push(new_data['dt'][i])
             plot_data['valor'].push(new_data['valor'][i])
+        }
+
+        if (state == 'Concursados') {
+            yaxis_label.set('axis_label', 'Número de proyectos')
+        } else if (state == 'Adjudicados') {
+            yaxis_label.set('axis_label', 'Número de proyectos')
+        } else if (state == 'Tasa de adjudicacion') {
+            yaxis_label.set('axis_label', 'Porcentaje')
         }
 
         plot_source.trigger('change');
@@ -236,10 +254,9 @@ states_callback = CustomJS(args=plot_sources, code="""
 
 
 # widgets for more interactions
-state_select = Select(value='n_concursados', title='Categoria', options=plot_sources['universidad_de_chile'].options,
+state_select = Select(value='Concursados', title='Categoria de Proyectos', options=plot_sources['universidad_de_chile'].options,
                       callback=states_callback)
 plot_sources['state_select'] = state_select
-print("state_select: ", state_select)
 
 # callback when a new country is selected
 countries_callback = CustomJS(args=plot_sources, code="""
@@ -247,18 +264,12 @@ countries_callback = CustomJS(args=plot_sources, code="""
         var country_title = cb_obj.get('value');
         country = country.replace(/\s+/g, '_').toLowerCase();
 
-        var eval_str = country + ".get('options')"
-        var states = eval(eval_str);
-        var state = states[0];
-
-        plot.set('title', state + ', ' + country_title);
-        state_select.set('value', state)
-        state_select.set('options', states)
+        var state = state_select.get('value');
 
         var plot_data = plot_source.get('data');
 
-        state = country.replace(/\s+/g, '_').toLowerCase()+'_'+state.replace(/\s+/g, '_').toLowerCase();
-        var eval_str = state + ".get('data')"
+        var name_category = country.replace(/\s+/g, '_').toLowerCase()+'_'+state.replace(/\s+/g, '_').toLowerCase();
+        var eval_str = name_category + ".get('data')"
         var new_data = eval(eval_str);
 
         plot_data['dt'] = []
@@ -269,19 +280,28 @@ countries_callback = CustomJS(args=plot_sources, code="""
             plot_data['valor'].push(new_data['valor'][i])
         }
 
+        if (state == 'Concursados') {
+            yaxis_label.set('axis_label', 'Número de proyectos')
+        } else if (state == 'Adjudicados') {
+            yaxis_label.set('axis_label', 'Número de proyectos')
+        } else if (state == 'Tasa de adjudicacion') {
+            yaxis_label.set('axis_label', 'Porcentaje')
+        }
+
         plot_source.trigger('change');
     """)
 
 country_select = Select(value='Universidad de Chile', title='Nombre de Universidad', options=countries, callback=countries_callback)
-print("country_select: ", country_select)
+states_callback.args['country_select'] = country_select
 
 # paragraph widgets to add some text
 p0 = Paragraph(text="")
-p1 = Paragraph(text="Update data in graph with options above.")
-p2 = Paragraph(text="Click and drag on graph to zoom in with box-zoom tool (reset zoom on toolbar).")
-p3 = Paragraph(text="Hover over data for values.")
-p4 = Paragraph(text="Try selecting a tropical location to see an obvious warming trend. For example: Amazonas, Brazil")
+p1 = Paragraph(text="Análisis descriptivo de los Proyectos Fondecyt regular en el período 2010-2016.")
+p2 = Paragraph(text="Elija el nombre de la Universidad y luego la Cantidad que quiere visualizar.")
+p3 = Paragraph(text="Para hacer zoom en una una zona del gráfico, haga click y dibuje un rectángulo.")
+p4 = Paragraph(text="Ubique el mouse sobre los círculos para visualizar los valores.")
+p5 = Div(text="""Diseñado por <a href="http://twitter.com/robertopmunoz">@robertopmunoz</a>""")
 
 # set the page layout
-layout = HBox(VBox(country_select, state_select, p0, p1, p2, p3, p4, width=200), plot, width=1250)
+layout = HBox(VBox(country_select, state_select, p0, p1, p2, p3, p4, p5, width=380), plot, width=1100)
 save(layout)
